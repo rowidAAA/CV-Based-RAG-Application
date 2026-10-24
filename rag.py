@@ -22,6 +22,8 @@ from qdrant_client import QdrantClient, models
 CHUNK_WORDS = 180
 CHUNK_OVERLAP = 35
 TOP_K = 4
+MMR_FETCH_MULTIPLIER = 3
+MMR_DIVERSITY = 0.5
 SECTION_NAMES = [
     "profile", "experience", "education", "skills", "projects",
     "certifications", "achievements", "languages", "publications", "volunteering",
@@ -407,7 +409,7 @@ def retrieve_chunks(
     sections: list[str] | None = None,
     candidate_headers: list[str] | None = None,
 ) -> list[tuple[Document, float]]:
-    """Search only metadata-approved headers, optionally narrowed by section."""
+    """Retrieve a broad candidate set, then diversify it with Qdrant MMR."""
     if not candidate_headers:
         return []
     query_filter = None
@@ -425,8 +427,15 @@ def retrieve_chunks(
             )
         )
     query_filter = models.Filter(must=conditions)
-    return store.similarity_search_with_score(
-        question, k=top_k, filter=query_filter
+    # MMR is a post-retrieval reranking step: it balances query relevance with
+    # diversity, reducing redundant overlapping chunks in the final context.
+    query_vector = store.embeddings.embed_query(question)
+    return store.max_marginal_relevance_search_with_score_by_vector(
+        query_vector,
+        k=top_k,
+        fetch_k=max(top_k, top_k * MMR_FETCH_MULTIPLIER),
+        lambda_mult=MMR_DIVERSITY,
+        filter=query_filter,
     )
 
 
